@@ -12,7 +12,7 @@ const CONNECTIONS = [
   [0, 17],
 ]
 
-export default function HandTracker({ onMove, onScale, onRotate }) {
+export default function HandTracker({ onMove, onScale, onRotate, cubeStateRef }) {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const initialDistanceRef = useRef(null)
@@ -160,10 +160,10 @@ export default function HandTracker({ onMove, onScale, onRotate }) {
 
           if (!initialDistanceRef.current) {
             initialDistanceRef.current = currentDistance
-            initialScaleRef.current = 1
+            initialScaleRef.current = cubeStateRef.current ? cubeStateRef.current.scale : 1
           } else {
             const scaleFactor = currentDistance / initialDistanceRef.current
-            const newScale = Math.min(Math.max(scaleFactor, 0.2), 4)
+            const newScale = Math.min(Math.max(initialScaleRef.current * scaleFactor, 0.2), 4)
             onScale(newScale)
           }
         }

@@ -27,7 +27,7 @@ export default function App() {
   return (
     <>
       <MemoizedScene3D cubeStateRef={cubeStateRef} />
-      <MemoizedHandTracker onMove={handleMove} onScale={handleScale} onRotate={handleRotate} />
+      <MemoizedHandTracker onMove={handleMove} onScale={handleScale} onRotate={handleRotate} cubeStateRef={cubeStateRef} />
     </>
   )
 }
