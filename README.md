@@ -1,17 +1,77 @@
-# React + Vite
+# AetherBuild
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**AetherBuild** is a browser based **gesture controlled 3D scene editor** that allows users to create and manipulate 3D objects using **natural two hand interactions** tracked via a webcam.
 
-Currently, two official plugins are available:
+Instead of using a mouse or keyboard, users build and interact with 3D objects **directly with their hands**, making AetherBuild a step toward **spatial computing on the web**.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## React Compiler
+## Features     
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Two hand tracking** using MediaPipe Hands  
+- **Real time 3D cube manipulation** with Three.js  
+- **Pinch to grab** objects  
+- **Move hand to position** objects in 3D space  
+- **Live gesture feedback UI** below webcam preview  
+- Runs **entirely in the browser** (no backend)
 
-## Expanding the ESLint configuration
+---
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
-# AtherBuild
+## How It Works
+
+AetherBuild follows a clean real-time pipeline:
+
+
+
+1. Webcam frames are captured in real time  
+2. MediaPipe detects hand landmarks (up to 2 hands)  
+3. Gesture math converts landmarks into meaningful actions  
+4. Actions update a live Three.js 3D scene  
+
+---
+
+## Gesture Controls (Current)
+
+### Right Hand
+- **Open Palm** → Preview / move cube  
+- **Pinch** → Grab and move cube  
+
+### Two Hands
+- **Both hands visible** → Enables multi hand interaction (scaling & rotation coming next)
+
+Gesture states are displayed live below the webcam feed for clarity and debugging.
+
+---
+
+## Tech Stack
+
+- **React** — UI structure & state management  
+- **Three.js** — 3D rendering engine  
+- **MediaPipe Hands** — Real time hand tracking  
+- **WebGL** — Hardware accelerated graphics  
+- **Vite** — Fast development tooling  
+
+
+---
+
+## Running the Project Locally
+
+### 1. Clone the repository
+```bash
+git clone https://github.com/yourname/aetherbuild.git
+cd aetherbuild
+```
+
+### 2. Install dependencies
+```bash
+npm install
+```
+
+### 3. Start the development server
+```bash
+npm run dev
+```
+
+**Open the browser at the URL shown** (usually http://localhost:5173).
+
+- ⚠️ Make sure to allow camera access when loading the page.

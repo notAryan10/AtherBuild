@@ -18,12 +18,19 @@ export function getHandCenter(landmarks) {
 export function detectGestures(landmarks) {
   const handCenter = getHandCenter(landmarks)
 
-  const isOpenPalm = landmarks[8].y < landmarks[5].y &&  landmarks[12].y < landmarks[9].y &&  landmarks[16].y < landmarks[13].y &&  landmarks[20].y < landmarks[17].y
+  const isOpenPalm = landmarks[8].y < landmarks[5].y && landmarks[12].y < landmarks[9].y && landmarks[16].y < landmarks[13].y && landmarks[20].y < landmarks[17].y
 
   const isFist = landmarks[8].y > landmarks[5].y && landmarks[12].y > landmarks[9].y && landmarks[16].y > landmarks[13].y && landmarks[20].y > landmarks[17].y
 
   const pinchDistance = distance(landmarks[4], landmarks[8])
   const isPinching = pinchDistance < 0.06
 
-  return {isOpenPalm, isFist, isPinching, pinchDistance, handCenter }
+  const indexUp = landmarks[8].y < landmarks[6].y
+  const middleUp = landmarks[12].y < landmarks[10].y
+  const ringDown = landmarks[16].y > landmarks[14].y
+  const pinkyDown = landmarks[20].y > landmarks[18].y
+
+  const isVictory = indexUp && middleUp && ringDown && pinkyDown
+
+  return { isOpenPalm, isFist, isPinching, isVictory, pinchDistance, handCenter }
 }
