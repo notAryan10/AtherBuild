@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, useMemo, useCallback } from "react"
 import { Hands } from "@mediapipe/hands"
 import { Camera } from "@mediapipe/camera_utils"
 import { detectGestures } from "./gestureMath"
+import ColorPicker from "../components/ColorPicker"
+import { useContext } from "react"
+import { AppContext } from "../context/AppProvider"
 
 const CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4],
@@ -12,21 +15,34 @@ const CONNECTIONS = [
   [0, 17],
 ]
 
-export default function HandTracker({ onMove, onScale, onRotate, cubeStateRef }) {
+export default function HandTracker() {
+  const { state, dispatch, cubeStateRef } = useContext(AppContext)
+  const { interactionMode, isShapeLocked, color } = state
+
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const initialDistanceRef = useRef(null)
-  const initialScaleRef = useRef(1)
+  const initialScaleRef = useRef({ x: 1, y: 1, z: 1 })
   const previousRightXRef = useRef(null)
   const previousRightYRef = useRef(null)
-
+  const movementOffsetRef = useRef(null)
+  const extrudeAxisRef = useRef('y')
+  const initialHandZRef = useRef(null)
+  const initialHandYRef = useRef(null)
+  const rotationAxisRef = useRef('y')
+  const initialRotationRef = useRef({ x: 0, y: 0, z: 0 })
+  const initialRotationHandYRef = useRef(null)
   const currentRotationRef = useRef({ x: 0, y: 0, z: 0 })
   const lastUiUpdateRef = useRef(0)
-
-  const [interactionMode, setInteractionMode] = useState('ROTATE')
   const victoryTimerRef = useRef(null)
+  const shapeGestureRef = useRef(null)
+  const shapeTimerRef = useRef(null)
+  const lockTimerRef = useRef(null)
+  const isShapeLockedRef = useRef(false)
+  const [lockCountdown, setLockCountdown] = useState(null)
   const [switchCountdown, setSwitchCountdown] = useState(null)
   const [gestureState, setGestureState] = useState({ left: null, right: null })
+  const [handCursor, setHandCursor] = useState(null)
 
   const config = useMemo(() => ({
     size: 320,
@@ -43,7 +59,7 @@ export default function HandTracker({ onMove, onScale, onRotate, cubeStateRef })
   }), [])
 
   const convertToWorldPos = useCallback((x, y) => ({
-    x: (x - 0.5) * 6,
+    x: (0.5 - x) * 6,
     y: -(y - 0.5) * 4,
     z: 0,
   }), [])
@@ -100,6 +116,11 @@ export default function HandTracker({ onMove, onScale, onRotate, cubeStateRef })
         if (type === "Right") {
           state.left = gesture
         }
+        if (type === "Right" && interactionMode === 'COLOR' && !gesture.isPinching) {
+          const indexTip = landmarks[8]
+          state.cursor = { x: 1 - indexTip.x, y: indexTip.y }
+        }
+
         landmarks.forEach((point) => { drawJoint(ctx, point.x * canvas.width, point.y * canvas.height) })
 
         CONNECTIONS.forEach(([start, end]) => {
@@ -110,38 +131,120 @@ export default function HandTracker({ onMove, onScale, onRotate, cubeStateRef })
       })
 
       const now = performance.now()
-      if (!lastUiUpdateRef.current || now - lastUiUpdateRef.current > 100) {
+      if (!lastUiUpdateRef.current || now - lastUiUpdateRef.current > 30) {
         setGestureState(state)
+        if (state.cursor) setHandCursor(state.cursor)
         lastUiUpdateRef.current = now
       }
 
-      if (isVictoryDetected) {
+      if (isVictoryDetected && !state.left?.isVictory) {
         if (!victoryTimerRef.current) {
           victoryTimerRef.current = performance.now()
         } else {
           const elapsed = performance.now() - victoryTimerRef.current
           const remaining = Math.ceil((3000 - elapsed) / 1000)
 
-          if (remaining !== switchCountdown) {
-            setSwitchCountdown(remaining)
-          }
+          setSwitchCountdown(remaining)
 
-          if (elapsed > 2000) {
-            setInteractionMode(prev => prev === 'ROTATE' ? 'SCALE' : 'ROTATE')
+
+          if (elapsed > 3000) {
+            let nextMode = 'MOVE'
+            const prev = interactionMode
+            if (prev === 'MOVE') nextMode = 'ROTATE'
+            else if (prev === 'ROTATE') nextMode = 'SCALE'
+            else if (prev === 'SCALE') nextMode = 'EXTRUDE'
+            else if (prev === 'EXTRUDE') nextMode = 'COLOR'
+
+            dispatch({ type: 'SET_INTERACTION_MODE', payload: nextMode })
+
             victoryTimerRef.current = null
             initialDistanceRef.current = null
+            initialHandZRef.current = null
             previousRightXRef.current = null
             previousRightYRef.current = null
+            movementOffsetRef.current = null
           }
         }
       } else {
         victoryTimerRef.current = null
       }
 
+      if (state.left) {
+        if (state.left.isThumbsUp) {
+          if (!lockTimerRef.current) {
+            lockTimerRef.current = performance.now()
+          } else {
+            const elapsed = performance.now() - lockTimerRef.current
+            const remaining = Math.ceil((3000 - elapsed) / 1000)
+            setLockCountdown(remaining)
 
-      if (state.right && !state.right.isFist && (state.right.isOpenPalm || state.right.isPinching)) {
-        const { x, y } = state.right.handCenter
-        onMove(convertToWorldPos(x, y))
+            if (elapsed > 3000) {
+              isShapeLockedRef.current = true
+              dispatch({ type: 'SET_SHAPE_LOCKED', payload: true })
+              lockTimerRef.current = null
+              setLockCountdown(null)
+            }
+          }
+        } else {
+          lockTimerRef.current = null
+          setLockCountdown((prev) => prev !== null ? null : prev)
+        }
+
+        if (!isShapeLockedRef.current) {
+          const count = state.left.fingerCount
+          let targetShape = null
+          if (count === 1) targetShape = 'CUBE'
+          else if (count === 2) targetShape = 'SPHERE'
+          else if (count === 3) targetShape = 'CYLINDER'
+          else if (count === 4) targetShape = 'CONE'
+          else if (count === 5) targetShape = 'TORUS'
+
+          if (targetShape) {
+            if (shapeGestureRef.current !== targetShape) {
+              shapeGestureRef.current = targetShape
+              shapeTimerRef.current = performance.now()
+            } else if (performance.now() - shapeTimerRef.current > 1000) {
+              dispatch({ type: 'SET_SHAPE', payload: targetShape })
+              shapeGestureRef.current = null
+              shapeTimerRef.current = performance.now() + 2000
+            }
+          } else {
+            shapeGestureRef.current = null
+            shapeTimerRef.current = null
+          }
+        }
+      } else {
+        shapeGestureRef.current = null
+        shapeTimerRef.current = null
+        lockTimerRef.current = null
+        setLockCountdown((prev) => prev !== null ? null : prev)
+      }
+
+
+      if (interactionMode === 'MOVE') {
+        if (state.right && !state.right.isFist && (state.right.isOpenPalm || state.right.isPinching)) {
+          const handPos = convertToWorldPos(state.right.handCenter.x, state.right.handCenter.y)
+
+          if (!movementOffsetRef.current) {
+            const currentPos = cubeStateRef.current ? cubeStateRef.current.position : { x: 0, y: 0, z: 0 }
+            movementOffsetRef.current = {
+              x: currentPos.x - handPos.x,
+              y: currentPos.y - handPos.y,
+            }
+          }
+
+          const newPos = {
+            x: handPos.x + movementOffsetRef.current.x,
+            y: handPos.y + movementOffsetRef.current.y,
+            z: 0
+          }
+
+          cubeStateRef.current.position = newPos
+        } else {
+          movementOffsetRef.current = null
+        }
+      } else {
+        movementOffsetRef.current = null
       }
 
       if (state.left?.isPinching && state.right?.isPinching) {
@@ -152,6 +255,7 @@ export default function HandTracker({ onMove, onScale, onRotate, cubeStateRef })
         const ry = state.right.handCenter.y
         const rz = state.right.handCenter.z
 
+
         if (interactionMode === 'SCALE') {
           const dx = lx - rx
           const dy = ly - ry
@@ -160,14 +264,18 @@ export default function HandTracker({ onMove, onScale, onRotate, cubeStateRef })
 
           if (!initialDistanceRef.current) {
             initialDistanceRef.current = currentDistance
-            initialScaleRef.current = cubeStateRef.current ? cubeStateRef.current.scale : 1
+            initialScaleRef.current = cubeStateRef.current ? { ...cubeStateRef.current.scale } : { x: 1, y: 1, z: 1 }
           } else {
             const scaleFactor = currentDistance / initialDistanceRef.current
-            const newScale = Math.min(Math.max(initialScaleRef.current * scaleFactor, 0.2), 4)
-            onScale(newScale)
+
+            const newScale = {
+              x: Math.min(Math.max(initialScaleRef.current.x * scaleFactor, 0.2), 5),
+              y: Math.min(Math.max(initialScaleRef.current.y * scaleFactor, 0.2), 5),
+              z: Math.min(Math.max(initialScaleRef.current.z * scaleFactor, 0.2), 5)
+            }
+            cubeStateRef.current.scale = newScale
           }
         }
-
         else {
           initialDistanceRef.current = null
         }
@@ -176,58 +284,64 @@ export default function HandTracker({ onMove, onScale, onRotate, cubeStateRef })
       }
 
 
-      if (interactionMode === 'ROTATE') {
-        if (state.right) {
-          const rx = state.right.handCenter.x
-          const ry = state.right.handCenter.y
-
-          if (!state.right.isFist) {
-            if (state.left?.isPinching && !state.right?.isPinching) {
-
-              if (previousRightXRef.current === null) previousRightXRef.current = rx
-              if (previousRightYRef.current === null) previousRightYRef.current = ry
-
-              const dx = rx - previousRightXRef.current
-              const dy = ry - previousRightYRef.current
-
-              currentRotationRef.current.y += dx * 5
-              currentRotationRef.current.x += dy * 5
-
-              onRotate({ ...currentRotationRef.current })
-
-              previousRightXRef.current = rx
-              previousRightYRef.current = ry
-
-
-            } else if (state.right?.isPinching && !state.left?.isPinching) {
-
-              if (previousRightXRef.current === null) previousRightXRef.current = rx
-
-              const dx = rx - previousRightXRef.current
-
-              currentRotationRef.current.z += dx * 5
-
-              onRotate({ ...currentRotationRef.current })
-
-              previousRightXRef.current = rx
-
-              previousRightYRef.current = null
-
-            } else {
-              previousRightXRef.current = null
-              previousRightYRef.current = null
-
-            }
-          } else {
-            previousRightXRef.current = null
-            previousRightYRef.current = null
-
-          }
+      if (interactionMode === 'EXTRUDE') {
+        if (state.left) {
+          const count = state.left.fingerCount
+          if (count === 1) extrudeAxisRef.current = 'x'
+          if (count === 3) extrudeAxisRef.current = 'y'
+          if (count === 4) extrudeAxisRef.current = 'z'
         }
-      } else {
-        previousRightXRef.current = null
-        previousRightYRef.current = null
 
+        if (state.right?.isPinching) {
+          const currentY = state.right.handCenter.y
+
+          if (initialHandYRef.current === null) {
+            initialHandYRef.current = currentY
+            initialScaleRef.current = cubeStateRef.current ? { ...cubeStateRef.current.scale } : { x: 1, y: 1, z: 1 }
+          } else {
+            const delta = (initialHandYRef.current - currentY) * 8
+
+            const axis = extrudeAxisRef.current
+            const baseVal = initialScaleRef.current[axis]
+            const newVal = Math.max(0.2, Math.min(baseVal + delta, 5))
+
+            const fullScaleState = cubeStateRef.current ? { ...cubeStateRef.current.scale } : { x: 1, y: 1, z: 1 }
+            fullScaleState[axis] = newVal
+
+            cubeStateRef.current.scale = fullScaleState
+          }
+        } else {
+          initialHandYRef.current = null
+        }
+      }
+
+
+
+
+      if (interactionMode === 'ROTATE') {
+        if (state.left) {
+          const count = state.left.fingerCount
+          if (count === 1) rotationAxisRef.current = 'x'
+          if (count === 3) rotationAxisRef.current = 'y'
+          if (count === 4) rotationAxisRef.current = 'z'
+        }
+
+        if (state.right?.isPinching) {
+          const currentY = state.right.handCenter.y
+
+          if (initialRotationHandYRef.current === null) {
+            initialRotationHandYRef.current = currentY
+            initialRotationRef.current = { ...currentRotationRef.current }
+          } else {
+            const delta = (initialRotationHandYRef.current - currentY) * 10
+            const axis = rotationAxisRef.current
+
+            currentRotationRef.current[axis] = initialRotationRef.current[axis] + delta
+            cubeStateRef.current.rotation = { ...currentRotationRef.current }
+          }
+        } else {
+          initialRotationHandYRef.current = null
+        }
       }
 
     })
@@ -247,6 +361,7 @@ export default function HandTracker({ onMove, onScale, onRotate, cubeStateRef })
       hands.close()
     }
   }, [config, drawJoint, drawBone, convertToWorldPos, onMove, onScale, onRotate, interactionMode])
+
 
   const videoStyle = useMemo(() => ({
     position: "absolute",
@@ -287,9 +402,33 @@ export default function HandTracker({ onMove, onScale, onRotate, cubeStateRef })
       <div style={panelStyle}>
         <div style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid rgba(255,255,255,0.3)' }}>
           <strong>MODE: <span style={{ color: '#00ffcc' }}>{interactionMode}</span></strong>
-          <div style={{ fontSize: 10, opacity: 0.7 }}>
-            Hold ✌️ (Victory) for 2s to switch
+          {(interactionMode === 'EXTRUDE' || interactionMode === 'ROTATE') && (
+            <div style={{ marginTop: 5 }}>
+              AXIS: <span style={{
+                color: (interactionMode === 'EXTRUDE' ? extrudeAxisRef.current : rotationAxisRef.current) === 'x' ? '#ff4444' :
+                  (interactionMode === 'EXTRUDE' ? extrudeAxisRef.current : rotationAxisRef.current) === 'y' ? '#44ff44' : '#4444ff',
+                fontWeight: 'bold'
+              }}>
+                {(interactionMode === 'EXTRUDE' ? extrudeAxisRef.current : rotationAxisRef.current).toUpperCase()}
+              </span>
+              <div style={{ fontSize: 10, opacity: 0.7 }}>
+                Left Hand: 1=X, 3=Y, 4=Z
+              </div>
+            </div>
+          )}
+          <div style={{ fontSize: 10, opacity: 0.7, marginTop: 5 }}>
+            Hold ✌️ (Victory) for 3s to switch
           </div>
+        </div>
+
+        <div style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid rgba(255,255,255,0.3)' }}>
+          <strong>SHAPE: <span style={{ color: isShapeLocked ? '#ff0055' : '#00ffcc' }}>{isShapeLocked ? "LOCKED 🔒" : "ACTIVE ✨"}</span></strong>
+          {!isShapeLocked && (
+            <div style={{ fontSize: 10, opacity: 0.7 }}>
+              Hold 👍 (Thumbs Up) for 3s to lock
+              {lockCountdown && <span style={{ marginLeft: 5, color: '#ffcc00', fontWeight: 'bold' }}>{lockCountdown}...</span>}
+            </div>
+          )}
         </div>
 
         <strong>Right Hand</strong>
@@ -300,10 +439,20 @@ export default function HandTracker({ onMove, onScale, onRotate, cubeStateRef })
 
         <hr style={{ opacity: 0.3 }} />
 
-        <strong>Left Hand</strong>
-        <div>Pinch: {gestureState.left?.isPinching ? "✅" : "❌"}</div>
-        <div>Victory: {gestureState.left?.isVictory ? "✅" : "❌"}</div>
+        <strong>Left Hand (Shape)</strong>
+        <div>Fingers: {gestureState.left?.fingerCount ?? 0}</div>
+        <div>Thumbs Up: {gestureState.left?.isThumbsUp ? "✅" : "❌"}</div>
+
       </div>
+
+      {interactionMode === 'COLOR' && (
+        <ColorPicker
+          interactionMode={interactionMode}
+          onColorChange={(c) => dispatch({ type: 'SET_COLOR', payload: c })}
+          handCursor={handCursor}
+        />
+      )}
     </>
   )
 }
+
