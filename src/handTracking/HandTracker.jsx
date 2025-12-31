@@ -80,6 +80,12 @@ export default function HandTracker() {
     ctx.stroke()
   }, [config])
 
+  const interactionModeRef = useRef(interactionMode)
+
+  useEffect(() => {
+    interactionModeRef.current = interactionMode
+  }, [interactionMode])
+
   useEffect(() => {
     const video = videoRef.current
     const canvas = canvasRef.current
@@ -116,7 +122,7 @@ export default function HandTracker() {
         if (type === "Right") {
           state.left = gesture
         }
-        if (type === "Right" && interactionMode === 'COLOR' && !gesture.isPinching) {
+        if (type === "Right" && interactionModeRef.current === 'COLOR' && !gesture.isPinching) {
           const indexTip = landmarks[8]
           state.cursor = { x: 1 - indexTip.x, y: indexTip.y }
         }
@@ -149,7 +155,7 @@ export default function HandTracker() {
 
           if (elapsed > 3000) {
             let nextMode = 'MOVE'
-            const prev = interactionMode
+            const prev = interactionModeRef.current
             if (prev === 'MOVE') nextMode = 'ROTATE'
             else if (prev === 'ROTATE') nextMode = 'SCALE'
             else if (prev === 'SCALE') nextMode = 'EXTRUDE'
@@ -221,7 +227,7 @@ export default function HandTracker() {
       }
 
 
-      if (interactionMode === 'MOVE') {
+      if (interactionModeRef.current === 'MOVE') {
         if (state.right && !state.right.isFist && (state.right.isOpenPalm || state.right.isPinching)) {
           const handPos = convertToWorldPos(state.right.handCenter.x, state.right.handCenter.y)
 
@@ -256,7 +262,7 @@ export default function HandTracker() {
         const rz = state.right.handCenter.z
 
 
-        if (interactionMode === 'SCALE') {
+        if (interactionModeRef.current === 'SCALE') {
           const dx = lx - rx
           const dy = ly - ry
           const dz = lz - rz
@@ -284,7 +290,7 @@ export default function HandTracker() {
       }
 
 
-      if (interactionMode === 'EXTRUDE') {
+      if (interactionModeRef.current === 'EXTRUDE') {
         if (state.left) {
           const count = state.left.fingerCount
           if (count === 1) extrudeAxisRef.current = 'x'
@@ -318,7 +324,7 @@ export default function HandTracker() {
 
 
 
-      if (interactionMode === 'ROTATE') {
+      if (interactionModeRef.current === 'ROTATE') {
         if (state.left) {
           const count = state.left.fingerCount
           if (count === 1) rotationAxisRef.current = 'x'
@@ -360,7 +366,7 @@ export default function HandTracker() {
       camera.stop()
       hands.close()
     }
-  }, [config, drawJoint, drawBone, convertToWorldPos, onMove, onScale, onRotate, interactionMode])
+  }, [config, drawJoint, drawBone, convertToWorldPos])
 
 
   const videoStyle = useMemo(() => ({

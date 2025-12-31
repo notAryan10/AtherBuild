@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useCallback, useContext } from "react"
+import { useEffect, useRef, useState, useMemo, useCallback, useContext } from "react"
 import * as THREE from "three"
 import { AppContext } from "../context/AppProvider"
 
@@ -7,7 +7,7 @@ export default function Scene3D() {
   const { currentShape, color } = state
   const mountRef = useRef(null)
   const cubeRef = useRef(null)
-  const sceneRef = useRef(null)
+  const [scene, setScene] = useState(null)
 
   const SMOOTH_POS = 0.18
   const SMOOTH_ROT = 0.12
@@ -49,7 +49,7 @@ export default function Scene3D() {
     if (!mount) return
 
     const scene = new THREE.Scene()
-    sceneRef.current = scene
+    setScene(scene)
     scene.background = new THREE.Color(sceneConfig.backgroundColor)
 
     const camera = new THREE.PerspectiveCamera(
@@ -94,11 +94,19 @@ export default function Scene3D() {
     }
   }, [sceneConfig, updateCube])
 
+
   useEffect(() => {
-    const scene = sceneRef.current
     if (!scene) return
 
+    let prevPosition = { x: 0, y: 0, z: 0 }
+    let prevRotation = new THREE.Euler(0, 0, 0)
+    let prevScale = { x: 1, y: 1, z: 1 }
+
     if (cubeRef.current) {
+      prevPosition = cubeRef.current.position.clone()
+      prevRotation = cubeRef.current.rotation.clone()
+      prevScale = cubeRef.current.scale.clone()
+
       scene.remove(cubeRef.current)
       cubeRef.current.geometry.dispose()
       cubeRef.current.material.dispose()
@@ -125,9 +133,19 @@ export default function Scene3D() {
 
     const material = new THREE.MeshStandardMaterial({ color: color || sceneConfig.cubeColor })
     const mesh = new THREE.Mesh(geometry, material)
+    mesh.position.copy(prevPosition)
+    mesh.rotation.copy(prevRotation)
+    mesh.scale.copy(prevScale)
+
     scene.add(mesh)
     cubeRef.current = mesh
-  }, [currentShape, sceneConfig.cubeColor, color])
+  }, [scene, currentShape, sceneConfig.cubeColor])
+
+  useEffect(() => {
+    if (cubeRef.current) {
+      cubeRef.current.material.color.set(color || sceneConfig.cubeColor)
+    }
+  }, [color, sceneConfig.cubeColor])
 
   return <div ref={mountRef} style={{ width: "100vw", height: "100vh" }} />
 }
