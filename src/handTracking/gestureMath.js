@@ -20,13 +20,9 @@ export function detectGestures(landmarks) {
 
   const thumbOpen = distance(landmarks[4], landmarks[17]) > 0.1
   const isOpenPalm = landmarks[8].y < landmarks[5].y && landmarks[12].y < landmarks[9].y && landmarks[16].y < landmarks[13].y && landmarks[20].y < landmarks[17].y && thumbOpen
-
   const isFist = landmarks[8].y > landmarks[5].y && landmarks[12].y > landmarks[9].y && landmarks[16].y > landmarks[13].y && landmarks[20].y > landmarks[17].y
-
   const pinchDistance = distance(landmarks[4], landmarks[8])
   const isPinching = pinchDistance < 0.06
-
-
   const indexUp = landmarks[8].y < landmarks[6].y
   const middleUp = landmarks[12].y < landmarks[10].y
   const ringUp = landmarks[16].y < landmarks[14].y
@@ -37,7 +33,6 @@ export function detectGestures(landmarks) {
   if (middleUp) fingerCount++
   if (ringUp) fingerCount++
   if (pinkyUp) fingerCount++
-
   if (isOpenPalm) fingerCount = 5
 
   if (indexUp && !middleUp && !ringUp && !pinkyUp) fingerCount = 1

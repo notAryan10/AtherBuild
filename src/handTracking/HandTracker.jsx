@@ -46,15 +46,14 @@ export default function HandTracker() {
 
   const config = useMemo(() => ({
     size: 320,
-    cameraWidth: 640,
-    cameraHeight: 480,
+    cameraWidth: 640, cameraHeight: 480,
     maxNumHands: 2,
     modelComplexity: 1,
     minDetectionConfidence: 0.7,
     minTrackingConfidence: 0.7,
     jointRadius: 5,
-    jointColor: "#00ffcc",
-    boneColor: "#00ffcc",
+    jointColor: "#b3ff00ff",
+    boneColor: "#f200ffff",
     boneWidth: 2,
   }), [])
 
@@ -123,7 +122,7 @@ export default function HandTracker() {
           state.left = gesture
         }
         if (type === "Right" && interactionModeRef.current === 'COLOR' && !gesture.isPinching) {
-          const indexTip = landmarks[8]
+          const indexTip = landmarks[8] 
           state.cursor = { x: 1 - indexTip.x, y: indexTip.y }
         }
 
@@ -273,7 +272,6 @@ export default function HandTracker() {
             initialScaleRef.current = cubeStateRef.current ? { ...cubeStateRef.current.scale } : { x: 1, y: 1, z: 1 }
           } else {
             const scaleFactor = currentDistance / initialDistanceRef.current
-
             const newScale = {
               x: Math.min(Math.max(initialScaleRef.current.x * scaleFactor, 0.2), 5),
               y: Math.min(Math.max(initialScaleRef.current.y * scaleFactor, 0.2), 5),
