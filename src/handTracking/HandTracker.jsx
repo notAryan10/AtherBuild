@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from "react"
 import { Hands } from "@mediapipe/hands"
+import * as THREE from "three"
 import { Camera } from "@mediapipe/camera_utils"
 import { detectGestures } from "./gestureMath"
 import ColorPicker from "../components/ColorPicker"
@@ -31,6 +32,7 @@ export default function HandTracker() {
   const initialHandYRef = useRef(null)
   const rotationAxisRef = useRef('y')
   const initialRotationRef = useRef({ x: 0, y: 0, z: 0 })
+  const initialQuaternionRef = useRef(new THREE.Quaternion())
   const initialRotationHandYRef = useRef(null)
   const currentRotationRef = useRef({ x: 0, y: 0, z: 0 })
   const lastUiUpdateRef = useRef(0)
@@ -122,7 +124,7 @@ export default function HandTracker() {
           state.left = gesture
         }
         if (type === "Right" && interactionModeRef.current === 'COLOR' && !gesture.isPinching) {
-          const indexTip = landmarks[8] 
+          const indexTip = landmarks[8]
           state.cursor = { x: 1 - indexTip.x, y: indexTip.y }
         }
 
@@ -150,7 +152,6 @@ export default function HandTracker() {
           const remaining = Math.ceil((3000 - elapsed) / 1000)
 
           setSwitchCountdown(remaining)
-
 
           if (elapsed > 3000) {
             let nextMode = 'MOVE'
@@ -335,13 +336,34 @@ export default function HandTracker() {
 
           if (initialRotationHandYRef.current === null) {
             initialRotationHandYRef.current = currentY
-            initialRotationRef.current = { ...currentRotationRef.current }
+            const currentQuat = cubeStateRef.current && cubeStateRef.current.quaternion ? new THREE.Quaternion(cubeStateRef.current.quaternion.x, cubeStateRef.current.quaternion.y, cubeStateRef.current.quaternion.z, cubeStateRef.current.quaternion.w) : new THREE.Quaternion()
+            initialQuaternionRef.current.copy(currentQuat)
           } else {
             const delta = (initialRotationHandYRef.current - currentY) * 10
-            const axis = rotationAxisRef.current
+            const axisName = rotationAxisRef.current
 
-            currentRotationRef.current[axis] = initialRotationRef.current[axis] + delta
-            cubeStateRef.current.rotation = { ...currentRotationRef.current }
+            const axis = new THREE.Vector3(
+              axisName === 'x' ? 1 : 0,
+              axisName === 'y' ? 1 : 0,
+              axisName === 'z' ? 1 : 0
+            )
+
+            const deltaQuat = new THREE.Quaternion().setFromAxisAngle(axis, delta)
+            const finalQuat = deltaQuat.multiply(initialQuaternionRef.current)
+
+            cubeStateRef.current.quaternion = {
+              x: finalQuat.x,
+              y: finalQuat.y,
+              z: finalQuat.z,
+              w: finalQuat.w
+            }
+
+            const euler = new THREE.Euler().setFromQuaternion(finalQuat)
+            cubeStateRef.current.rotation = {
+              x: euler.x,
+              y: euler.y,
+              z: euler.z
+            }
           }
         } else {
           initialRotationHandYRef.current = null

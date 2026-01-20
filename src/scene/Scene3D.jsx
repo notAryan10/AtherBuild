@@ -35,9 +35,14 @@ export default function Scene3D() {
     mesh.position.y += (target.position.y - mesh.position.y) * SMOOTH_POS
     mesh.position.z += (target.position.z - mesh.position.z) * SMOOTH_POS
 
-    mesh.rotation.x += (target.rotation.x - mesh.rotation.x) * SMOOTH_ROT
-    mesh.rotation.y += (target.rotation.y - mesh.rotation.y) * SMOOTH_ROT
-    mesh.rotation.z += (target.rotation.z - mesh.rotation.z) * SMOOTH_ROT
+    if (target.quaternion) {
+      const targetQuat = new THREE.Quaternion(target.quaternion.x, target.quaternion.y, target.quaternion.z, target.quaternion.w)
+      mesh.quaternion.slerp(targetQuat, SMOOTH_ROT)
+    } else {
+      mesh.rotation.x += (target.rotation.x - mesh.rotation.x) * SMOOTH_ROT
+      mesh.rotation.y += (target.rotation.y - mesh.rotation.y) * SMOOTH_ROT
+      mesh.rotation.z += (target.rotation.z - mesh.rotation.z) * SMOOTH_ROT
+    }
 
     mesh.scale.x += (target.scale.x - mesh.scale.x) * SMOOTH_SCALE
     mesh.scale.y += (target.scale.y - mesh.scale.y) * SMOOTH_SCALE
@@ -99,14 +104,11 @@ export default function Scene3D() {
     if (!scene) return
 
     let prevPosition = { x: 0, y: 0, z: 0 }
-    let prevRotation = new THREE.Euler(0, 0, 0)
-    let prevScale = { x: 1, y: 1, z: 1 }
+    const prevRotation = cubeRef.current ? cubeRef.current.rotation.clone() : new THREE.Euler(0, 0, 0)
+    const prevQuaternion = cubeRef.current ? cubeRef.current.quaternion.clone() : new THREE.Quaternion()
+    const prevScale = cubeRef.current ? cubeRef.current.scale.clone() : new THREE.Vector3(1, 1, 1)
 
     if (cubeRef.current) {
-      prevPosition = cubeRef.current.position.clone()
-      prevRotation = cubeRef.current.rotation.clone()
-      prevScale = cubeRef.current.scale.clone()
-
       scene.remove(cubeRef.current)
       cubeRef.current.geometry.dispose()
       cubeRef.current.material.dispose()
@@ -135,6 +137,7 @@ export default function Scene3D() {
     const mesh = new THREE.Mesh(geometry, material)
     mesh.position.copy(prevPosition)
     mesh.rotation.copy(prevRotation)
+    mesh.quaternion.copy(prevQuaternion)
     mesh.scale.copy(prevScale)
 
     scene.add(mesh)
