@@ -1,77 +1,84 @@
 # AetherBuild
 
-**AetherBuild** is a browser based **gesture controlled 3D scene editor** that allows users to create and manipulate 3D objects using **natural two hand interactions** tracked via a webcam.
+AetherBuild is a browser-based 3D scene editor controlled by webcam hand gestures. It combines React, Three.js, and MediaPipe Hands to make spatial object creation and editing accessible without requiring a traditional mouse-first workflow.
 
-Instead of using a mouse or keyboard, users build and interact with 3D objects **directly with their hands**, making AetherBuild a step toward **spatial computing on the web**.
+## Current capabilities
 
----
+- Create cubes, spheres, cylinders, cones, and toruses.
+- Manage multiple independent objects in a scene hierarchy.
+- Select, duplicate, and delete scene objects.
+- Edit position, rotation, scale, and color numerically.
+- Use Three.js transform gizmos for mouse-based editing.
+- Switch between perspective and orthographic camera views.
+- Toggle alignment guides through the selected object.
+- Orbit, pan, zoom, and frame the selected object.
+- Undo and redo committed transforms and scene edits.
+- Use hand gestures to move, scale, rotate, extrude, and color the selected object.
+- Preserve object transforms when switching selection, modes, or camera views.
 
-## Features     
+## Roadmap progress
 
-- **Two hand tracking** using MediaPipe Hands  
-- **Real time 3D cube manipulation** with Three.js  
-- **Pinch to grab** objects  
-- **Move hand to position** objects in 3D space  
-- **Live gesture feedback UI** below webcam preview  
-- Runs **entirely in the browser** (no backend)
+- **P0 — Foundation:** Complete. Core Three.js scene, webcam tracking, transform synchronization, and resize handling are in place.
+- **P1 — Usable hand interactions:** Complete. Gesture stabilization, calibration, tracking feedback, camera controls, and recovery behavior are implemented.
+- **P2 — Multi-object scene editor:** Complete. Scene state is the source of truth for object identity, transforms, selection, hierarchy, materials, and resource cleanup.
+- **P3 — Spatial interaction and professional editing tools:** Complete. Transform gizmos, snapping, orthographic/perspective views, alignment guides, unified hand-frame routing, and robust gesture release recovery are implemented.
 
----
+## Interaction modes
 
-## How It Works
+The toolbar provides direct controls for Move, Rotate, and Scale. Additional hand interaction modes include Extrude and Color. A victory-hand gesture held for several seconds cycles through the available interaction modes.
 
-AetherBuild follows a clean real-time pipeline:
+### Hand controls
 
+- **Open palm or pinch:** Move the selected object.
+- **Two-hand pinch:** Scale the selected object.
+- **Pinch with the rotation mode active:** Rotate the selected object.
+- **Pinch with the extrude mode active:** Scale along an axis selected by the other hand's finger count.
+- **Color mode:** Move the hand cursor over the color picker to update the selected object's material color.
+- **Release or remove a hand:** Commit the current gesture as one undoable transform and reset gesture state safely.
 
+Mouse selection and transform controls remain available while hand tracking is active.
 
-1. Webcam frames are captured in real time  
-2. MediaPipe detects hand landmarks (up to 2 hands)  
-3. Gesture math converts landmarks into meaningful actions  
-4. Actions update a live Three.js 3D scene  
+## Architecture
 
----
+The scene store is the source of truth. Three.js meshes are synchronized from reducer state rather than owning independent application state.
 
-## Gesture Controls (Current)
+- `src/state/sceneReducer.js` — scene create, select, duplicate, delete, and transform actions.
+- `src/scene/SceneManager.js` — synchronizes scene objects with Three.js meshes and disposes resources.
+- `src/scene/ObjectFactory.js` — creates supported primitive geometries and materials.
+- `src/components/SceneHierarchy.jsx` — scene object list and selection.
+- `src/components/InspectorPanel.jsx` — numeric transform and material editing.
+- `src/scene/Scene3D.jsx` — cameras, orbit controls, transform gizmos, guides, and rendering.
+- `src/handTracking/HandTracker.jsx` — MediaPipe input, gesture interpretation, and reducer command routing.
 
-### Right Hand
-- **Open Palm** → Preview / move cube  
-- **Pinch** → Grab and move cube  
+## How it works
 
-### Two Hands
-- **Both hands visible** → Enables multi hand interaction (scaling & rotation coming next)
+1. Webcam frames are sent to MediaPipe Hands.
+2. Hand landmarks are stabilized and converted into gesture state.
+3. Gesture state dispatches commands to the application reducer.
+4. The reducer updates the selected scene object.
+5. Three.js synchronizes meshes, gizmos, guides, and camera presentation from that state.
 
-Gesture states are displayed live below the webcam feed for clarity and debugging.
+## Tech stack
 
----
+- React
+- Three.js
+- MediaPipe Hands
+- WebGL
+- Vite
 
-## Tech Stack
+## Run locally
 
-- **React** — UI structure & state management  
-- **Three.js** — 3D rendering engine  
-- **MediaPipe Hands** — Real time hand tracking  
-- **WebGL** — Hardware accelerated graphics  
-- **Vite** — Fast development tooling  
-
-
----
-
-## Running the Project Locally
-
-### 1. Clone the repository
 ```bash
-git clone https://github.com/yourname/aetherbuild.git
-cd aetherbuild
-```
-
-### 2. Install dependencies
-```bash
+git clone https://github.com/notAryan10/AtherBuild.git
+cd AtherBuild
 npm install
-```
-
-### 3. Start the development server
-```bash
 npm run dev
 ```
 
-**Open the browser at the URL shown** (usually http://localhost:5173).
+Open the local URL shown by Vite, usually `http://localhost:5173`, and allow camera access when prompted.
 
-- ⚠️ Make sure to allow camera access when loading the page.
+To create a production build:
+
+```bash
+npm run build
+```
