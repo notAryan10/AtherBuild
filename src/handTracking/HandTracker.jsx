@@ -4,6 +4,10 @@ import * as THREE from "three"
 import { Camera } from "@mediapipe/camera_utils"
 import { detectGestures } from "./gestureMath"
 import ColorPicker from "../components/ColorPicker"
+import InteractionHUD from "../components/InteractionHUD"
+import CameraPanel from "../components/CameraPanel"
+import { GestureController } from "./GestureController"
+import { Calibration } from "./Calibration"
 import { useContext } from "react"
 import { AppContext } from "../context/AppProvider"
 
@@ -17,8 +21,8 @@ const CONNECTIONS = [
 ]
 
 export default function HandTracker() {
-  const { state, dispatch, cubeStateRef } = useContext(AppContext)
-  const { interactionMode, isShapeLocked, color } = state
+  const { state, dispatch, selectedObjectRef } = useContext(AppContext)
+  const { interactionMode, snapEnabled, gridSnap, rotationSnap } = state
 
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
@@ -37,13 +41,15 @@ export default function HandTracker() {
   const currentRotationRef = useRef({ x: 0, y: 0, z: 0 })
   const lastUiUpdateRef = useRef(0)
   const victoryTimerRef = useRef(null)
-  const shapeGestureRef = useRef(null)
-  const shapeTimerRef = useRef(null)
-  const lockTimerRef = useRef(null)
-  const isShapeLockedRef = useRef(false)
-  const [lockCountdown, setLockCountdown] = useState(null)
+  const gestureControllerRef = useRef(new GestureController())
+  const calibrationRef = useRef(new Calibration())
+  const trackingPausedRef = useRef(false)
+  const gestureBeforeRef = useRef(null)
   const [switchCountdown, setSwitchCountdown] = useState(null)
+  const [cameraStatus, setCameraStatus] = useState(() => navigator.mediaDevices?.getUserMedia ? 'starting' : 'unsupported')
   const [gestureState, setGestureState] = useState({ left: null, right: null })
+  const [gestureEvent, setGestureEvent] = useState(null)
+  const [isTrackingPaused, setIsTrackingPaused] = useState(false)
   const [handCursor, setHandCursor] = useState(null)
 
   const config = useMemo(() => ({
@@ -59,11 +65,14 @@ export default function HandTracker() {
     boneWidth: 2,
   }), [])
 
-  const convertToWorldPos = useCallback((x, y) => ({
-    x: (0.5 - x) * 6,
-    y: -(y - 0.5) * 4,
-    z: 0,
-  }), [])
+  const convertToWorldPos = useCallback((x, y) => {
+    const calibrated = calibrationRef.current.adjust({ x, y, z: 0 })
+    return {
+      x: (0.5 - calibrated.x) * 6,
+      y: -(calibrated.y - 0.5) * 4,
+      z: calibrated.z,
+    }
+  }, [])
 
   const drawJoint = useCallback((ctx, x, y) => {
     ctx.beginPath()
@@ -83,14 +92,72 @@ export default function HandTracker() {
 
   const interactionModeRef = useRef(interactionMode)
 
+  const captureGestureTransform = useCallback(() => {
+    const object = selectedObjectRef.current
+    if (!object || gestureBeforeRef.current) return
+    gestureBeforeRef.current = {
+      ...object,
+      position: { ...object.position },
+      rotation: { ...object.rotation },
+      scale: { ...object.scale },
+      quaternion: { ...object.quaternion },
+    }
+  }, [selectedObjectRef])
+
+  const commitGestureTransform = useCallback(() => {
+    const before = gestureBeforeRef.current
+    const object = selectedObjectRef.current
+    if (before && object) dispatch({ type: 'COMMIT_TRANSFORM', payload: { id: object.id, before } })
+    gestureBeforeRef.current = null
+  }, [dispatch, selectedObjectRef])
+
+  const dispatchLiveTransform = useCallback((changes) => {
+    const object = selectedObjectRef.current
+    if (object) dispatch({ type: 'LIVE_UPDATE_OBJECT', payload: { id: object.id, changes } })
+  }, [dispatch, selectedObjectRef])
+
+  const resetGestureRefs = useCallback(() => {
+    initialDistanceRef.current = null
+    initialHandZRef.current = null
+    initialHandYRef.current = null
+    previousRightXRef.current = null
+    previousRightYRef.current = null
+    movementOffsetRef.current = null
+    initialRotationHandYRef.current = null
+    victoryTimerRef.current = null
+    gestureControllerRef.current.reset()
+  }, [])
+
+  const resetInteractionRefs = useCallback(() => {
+    commitGestureTransform()
+    resetGestureRefs()
+    setSwitchCountdown(null)
+  }, [commitGestureTransform, resetGestureRefs])
+
   useEffect(() => {
     interactionModeRef.current = interactionMode
-  }, [interactionMode])
+    commitGestureTransform()
+    resetGestureRefs()
+  }, [interactionMode, commitGestureTransform, resetGestureRefs])
+
+  useEffect(() => {
+    trackingPausedRef.current = isTrackingPaused
+  }, [isTrackingPaused])
 
   useEffect(() => {
     const video = videoRef.current
     const canvas = canvasRef.current
+    if (!video || !canvas) return
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      return
+    }
+
     const ctx = canvas.getContext("2d")
+    const markReady = () => setCameraStatus('ready')
+    const markFailed = () => setCameraStatus('error')
+    video.addEventListener('loadeddata', markReady)
+    video.addEventListener('error', markFailed)
 
     const hands = new Hands({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
@@ -106,22 +173,33 @@ export default function HandTracker() {
     hands.onResults((results) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-      if (!results.multiHandLandmarks || !results.multiHandedness) return
+      if (!results.multiHandLandmarks?.length || !results.multiHandedness?.length) {
+        resetInteractionRefs()
+        setGestureState({ left: null, right: null })
+        setCameraStatus((status) => status === 'ready' ? 'no-hand' : status)
+        return
+      }
+
+      setCameraStatus('tracking')
 
       const state = { left: null, right: null }
       let isVictoryDetected = false
+      let latestGestureEvent = null
 
       results.multiHandLandmarks.forEach((landmarks, index) => {
         const type = results.multiHandedness[index].label
         const gesture = detectGestures(landmarks)
+        const stabilized = gestureControllerRef.current.update(type, gesture)
+        const stableGesture = stabilized.gesture
+        if (stabilized.events.length) latestGestureEvent = stabilized.events[stabilized.events.length - 1]
 
         if (gesture.isVictory) isVictoryDetected = true
 
         if (type === "Left") {
-          state.right = gesture
+          state.right = stableGesture
         }
         if (type === "Right") {
-          state.left = gesture
+          state.left = stableGesture
         }
         if (type === "Right" && interactionModeRef.current === 'COLOR' && !gesture.isPinching) {
           const indexTip = landmarks[8]
@@ -140,6 +218,7 @@ export default function HandTracker() {
       const now = performance.now()
       if (!lastUiUpdateRef.current || now - lastUiUpdateRef.current > 30) {
         setGestureState(state)
+        if (latestGestureEvent) setGestureEvent(latestGestureEvent)
         if (state.cursor) setHandCursor(state.cursor)
         lastUiUpdateRef.current = now
       }
@@ -175,64 +254,13 @@ export default function HandTracker() {
         victoryTimerRef.current = null
       }
 
-      if (state.left) {
-        if (state.left.isThumbsUp) {
-          if (!lockTimerRef.current) {
-            lockTimerRef.current = performance.now()
-          } else {
-            const elapsed = performance.now() - lockTimerRef.current
-            const remaining = Math.ceil((3000 - elapsed) / 1000)
-            setLockCountdown(remaining)
-
-            if (elapsed > 3000) {
-              isShapeLockedRef.current = true
-              dispatch({ type: 'SET_SHAPE_LOCKED', payload: true })
-              lockTimerRef.current = null
-              setLockCountdown(null)
-            }
-          }
-        } else {
-          lockTimerRef.current = null
-          setLockCountdown((prev) => prev !== null ? null : prev)
-        }
-
-        if (!isShapeLockedRef.current) {
-          const count = state.left.fingerCount
-          let targetShape = null
-          if (count === 1) targetShape = 'CUBE'
-          else if (count === 2) targetShape = 'SPHERE'
-          else if (count === 3) targetShape = 'CYLINDER'
-          else if (count === 4) targetShape = 'CONE'
-          else if (count === 5) targetShape = 'TORUS'
-
-          if (targetShape) {
-            if (shapeGestureRef.current !== targetShape) {
-              shapeGestureRef.current = targetShape
-              shapeTimerRef.current = performance.now()
-            } else if (performance.now() - shapeTimerRef.current > 1000) {
-              dispatch({ type: 'SET_SHAPE', payload: targetShape })
-              shapeGestureRef.current = null
-              shapeTimerRef.current = performance.now() + 2000
-            }
-          } else {
-            shapeGestureRef.current = null
-            shapeTimerRef.current = null
-          }
-        }
-      } else {
-        shapeGestureRef.current = null
-        shapeTimerRef.current = null
-        lockTimerRef.current = null
-        setLockCountdown((prev) => prev !== null ? null : prev)
-      }
-
-
       if (interactionModeRef.current === 'MOVE') {
         if (state.right && !state.right.isFist && (state.right.isOpenPalm || state.right.isPinching)) {
+          captureGestureTransform()
           const handPos = convertToWorldPos(state.right.handCenter.x, state.right.handCenter.y)
 
           if (!movementOffsetRef.current) {
-            const currentPos = cubeStateRef.current ? cubeStateRef.current.position : { x: 0, y: 0, z: 0 }
+            const currentPos = selectedObjectRef.current ? selectedObjectRef.current.position : { x: 0, y: 0, z: 0 }
             movementOffsetRef.current = {
               x: currentPos.x - handPos.x,
               y: currentPos.y - handPos.y,
@@ -245,11 +273,18 @@ export default function HandTracker() {
             z: 0
           }
 
-          cubeStateRef.current.position = newPos
+          if (snapEnabled) {
+            newPos.x = Math.round(newPos.x / gridSnap) * gridSnap
+            newPos.y = Math.round(newPos.y / gridSnap) * gridSnap
+          }
+
+          dispatchLiveTransform({ position: newPos })
         } else {
           movementOffsetRef.current = null
+          commitGestureTransform()
         }
       } else {
+        commitGestureTransform()
         movementOffsetRef.current = null
       }
 
@@ -269,8 +304,9 @@ export default function HandTracker() {
           const currentDistance = Math.sqrt(dx * dx + dy * dy + dz * dz)
 
           if (!initialDistanceRef.current) {
+            captureGestureTransform()
             initialDistanceRef.current = currentDistance
-            initialScaleRef.current = cubeStateRef.current ? { ...cubeStateRef.current.scale } : { x: 1, y: 1, z: 1 }
+            initialScaleRef.current = selectedObjectRef.current ? { ...selectedObjectRef.current.scale } : { x: 1, y: 1, z: 1 }
           } else {
             const scaleFactor = currentDistance / initialDistanceRef.current
             const newScale = {
@@ -278,13 +314,14 @@ export default function HandTracker() {
               y: Math.min(Math.max(initialScaleRef.current.y * scaleFactor, 0.2), 5),
               z: Math.min(Math.max(initialScaleRef.current.z * scaleFactor, 0.2), 5)
             }
-            cubeStateRef.current.scale = newScale
+            dispatchLiveTransform({ scale: newScale })
           }
         }
         else {
           initialDistanceRef.current = null
         }
       } else {
+        commitGestureTransform()
         initialDistanceRef.current = null
       }
 
@@ -301,8 +338,9 @@ export default function HandTracker() {
           const currentY = state.right.handCenter.y
 
           if (initialHandYRef.current === null) {
+            captureGestureTransform()
             initialHandYRef.current = currentY
-            initialScaleRef.current = cubeStateRef.current ? { ...cubeStateRef.current.scale } : { x: 1, y: 1, z: 1 }
+            initialScaleRef.current = selectedObjectRef.current ? { ...selectedObjectRef.current.scale } : { x: 1, y: 1, z: 1 }
           } else {
             const delta = (initialHandYRef.current - currentY) * 8
 
@@ -310,12 +348,13 @@ export default function HandTracker() {
             const baseVal = initialScaleRef.current[axis]
             const newVal = Math.max(0.2, Math.min(baseVal + delta, 5))
 
-            const fullScaleState = cubeStateRef.current ? { ...cubeStateRef.current.scale } : { x: 1, y: 1, z: 1 }
+            const fullScaleState = selectedObjectRef.current ? { ...selectedObjectRef.current.scale } : { x: 1, y: 1, z: 1 }
             fullScaleState[axis] = newVal
 
-            cubeStateRef.current.scale = fullScaleState
+            dispatchLiveTransform({ scale: fullScaleState })
           }
         } else {
+          commitGestureTransform()
           initialHandYRef.current = null
         }
       }
@@ -335,11 +374,16 @@ export default function HandTracker() {
           const currentY = state.right.handCenter.y
 
           if (initialRotationHandYRef.current === null) {
+            captureGestureTransform()
             initialRotationHandYRef.current = currentY
-            const currentQuat = cubeStateRef.current && cubeStateRef.current.quaternion ? new THREE.Quaternion(cubeStateRef.current.quaternion.x, cubeStateRef.current.quaternion.y, cubeStateRef.current.quaternion.z, cubeStateRef.current.quaternion.w) : new THREE.Quaternion()
+            const currentQuat = selectedObjectRef.current?.quaternion ? new THREE.Quaternion(selectedObjectRef.current.quaternion.x, selectedObjectRef.current.quaternion.y, selectedObjectRef.current.quaternion.z, selectedObjectRef.current.quaternion.w) : new THREE.Quaternion()
             initialQuaternionRef.current.copy(currentQuat)
           } else {
-            const delta = (initialRotationHandYRef.current - currentY) * 10
+            let delta = (initialRotationHandYRef.current - currentY) * 10
+            if (snapEnabled) {
+              const increment = THREE.MathUtils.degToRad(rotationSnap)
+              delta = Math.round(delta / increment) * increment
+            }
             const axisName = rotationAxisRef.current
 
             const axis = new THREE.Vector3(
@@ -351,7 +395,7 @@ export default function HandTracker() {
             const deltaQuat = new THREE.Quaternion().setFromAxisAngle(axis, delta)
             const finalQuat = deltaQuat.multiply(initialQuaternionRef.current)
 
-            cubeStateRef.current.quaternion = {
+            const quaternion = {
               x: finalQuat.x,
               y: finalQuat.y,
               z: finalQuat.z,
@@ -359,13 +403,17 @@ export default function HandTracker() {
             }
 
             const euler = new THREE.Euler().setFromQuaternion(finalQuat)
-            cubeStateRef.current.rotation = {
+            dispatchLiveTransform({
+              quaternion,
+              rotation: {
               x: euler.x,
               y: euler.y,
               z: euler.z
-            }
+              }
+            })
           }
         } else {
+          commitGestureTransform()
           initialRotationHandYRef.current = null
         }
       }
@@ -374,19 +422,27 @@ export default function HandTracker() {
 
     const camera = new Camera(video, {
       onFrame: async () => {
+        if (trackingPausedRef.current) return
         await hands.send({ image: video })
       },
       width: config.cameraWidth,
       height: config.cameraHeight,
     })
 
-    camera.start()
+    try {
+      camera.start()
+    } catch {
+      setCameraStatus('error')
+    }
 
     return () => {
+      video.removeEventListener('loadeddata', markReady)
+      video.removeEventListener('error', markFailed)
+      resetInteractionRefs()
       camera.stop()
       hands.close()
     }
-  }, [config, drawJoint, drawBone, convertToWorldPos])
+  }, [config, drawJoint, drawBone, convertToWorldPos, resetInteractionRefs, captureGestureTransform, commitGestureTransform, dispatchLiveTransform])
 
 
   const videoStyle = useMemo(() => ({
@@ -409,68 +465,28 @@ export default function HandTracker() {
     transform: "scaleX(-1)",
   }), [config.size])
 
-  const panelStyle = useMemo(() => ({
-    position: "absolute",
-    top: config.size * 0.75 + 20,
-    right: 10,
-    width: config.size,
-    background: "rgba(0,0,0,0.75)",
-    padding: 10,
-    borderRadius: 10,
-    fontSize: 12,
-  }), [config.size])
-
   return (
     <>
-      <video ref={videoRef} autoPlay playsInline style={videoStyle} />
-      <canvas ref={canvasRef} width={config.cameraWidth} height={config.cameraHeight} style={canvasStyle} />
-
-      <div style={panelStyle}>
-        <div style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid rgba(255,255,255,0.3)' }}>
-          <strong>MODE: <span style={{ color: '#00ffcc' }}>{interactionMode}</span></strong>
-          {(interactionMode === 'EXTRUDE' || interactionMode === 'ROTATE') && (
-            <div style={{ marginTop: 5 }}>
-              AXIS: <span style={{
-                color: (interactionMode === 'EXTRUDE' ? extrudeAxisRef.current : rotationAxisRef.current) === 'x' ? '#ff4444' :
-                  (interactionMode === 'EXTRUDE' ? extrudeAxisRef.current : rotationAxisRef.current) === 'y' ? '#44ff44' : '#4444ff',
-                fontWeight: 'bold'
-              }}>
-                {(interactionMode === 'EXTRUDE' ? extrudeAxisRef.current : rotationAxisRef.current).toUpperCase()}
-              </span>
-              <div style={{ fontSize: 10, opacity: 0.7 }}>
-                Left Hand: 1=X, 3=Y, 4=Z
-              </div>
-            </div>
-          )}
-          <div style={{ fontSize: 10, opacity: 0.7, marginTop: 5 }}>
-            Hold ✌️ (Victory) for 3s to switch
-          </div>
-        </div>
-
-        <div style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid rgba(255,255,255,0.3)' }}>
-          <strong>SHAPE: <span style={{ color: isShapeLocked ? '#ff0055' : '#00ffcc' }}>{isShapeLocked ? "LOCKED 🔒" : "ACTIVE ✨"}</span></strong>
-          {!isShapeLocked && (
-            <div style={{ fontSize: 10, opacity: 0.7 }}>
-              Hold 👍 (Thumbs Up) for 3s to lock
-              {lockCountdown && <span style={{ marginLeft: 5, color: '#ffcc00', fontWeight: 'bold' }}>{lockCountdown}...</span>}
-            </div>
-          )}
-        </div>
-
-        <strong>Right Hand</strong>
-        <div>Open: {gestureState.right?.isOpenPalm ? "✅" : "❌"}</div>
-        <div>Fist: {gestureState.right?.isFist ? "✅" : "❌"}</div>
-        <div>Pinch: {gestureState.right?.isPinching ? "✅" : "❌"}</div>
-        <div>Victory: {gestureState.right?.isVictory ? "✅" : "❌"}</div>
-
-        <hr style={{ opacity: 0.3 }} />
-
-        <strong>Left Hand (Shape)</strong>
-        <div>Fingers: {gestureState.left?.fingerCount ?? 0}</div>
-        <div>Thumbs Up: {gestureState.left?.isThumbsUp ? "✅" : "❌"}</div>
-
-      </div>
-
+      <CameraPanel
+        videoRef={videoRef}
+        canvasRef={canvasRef}
+        videoStyle={videoStyle}
+        canvasStyle={canvasStyle}
+        cameraWidth={config.cameraWidth}
+        cameraHeight={config.cameraHeight}
+        cameraStatus={isTrackingPaused ? 'paused' : cameraStatus}
+        isPaused={isTrackingPaused}
+        onTogglePause={() => setIsTrackingPaused((paused) => !paused)}
+      />
+      <InteractionHUD
+        interactionMode={interactionMode}
+        currentShape={state.currentShape}
+        cameraStatus={cameraStatus}
+        gestureState={gestureState}
+        gestureEvent={gestureEvent}
+        switchCountdown={switchCountdown}
+        onRecalibrate={() => calibrationRef.current.calibrate(gestureState.right?.handCenter)}
+      />
       {interactionMode === 'COLOR' && (
         <ColorPicker
           interactionMode={interactionMode}
@@ -481,4 +497,3 @@ export default function HandTracker() {
     </>
   )
 }
-
